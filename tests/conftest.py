@@ -4,7 +4,6 @@ from urllib.parse import urlparse
 import numpy as np
 import pytest
 import rioxarray
-import tifffile
 import xarray as xr
 from obspec_utils.registry import ObjectStoreRegistry
 from obstore.store import LocalStore
@@ -51,13 +50,25 @@ def chunky_rgb_file(tmp_path: Path) -> str:
     """
     filepath = tmp_path / "chunky_rgb.tif"
     rng = np.random.default_rng(0)
-    data = rng.integers(0, 256, size=(64, 64, 3), dtype="uint8")
-    tifffile.imwrite(
-        filepath,
+    data = rng.integers(0, 256, size=(3, 64, 64), dtype="uint8")
+    # Real coords, so rioxarray writes a geotransform rather than warning about
+    # falling back to the identity matrix.
+    da = xr.DataArray(
         data,
-        photometric="rgb",
-        planarconfig="contig",
-        tile=(16, 16),
+        dims=("band", "y", "x"),
+        coords={
+            "band": [1, 2, 3],
+            "y": 1000.0 - 10.0 * np.arange(64),
+            "x": 500.0 + 10.0 * np.arange(64),
+        },
+    )
+    da.rio.to_raster(
+        filepath,
+        driver="GTiff",
+        INTERLEAVE="PIXEL",
+        TILED="YES",
+        BLOCKXSIZE=16,
+        BLOCKYSIZE=16,
     )
     return str(filepath)
 
