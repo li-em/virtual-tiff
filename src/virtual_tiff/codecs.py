@@ -30,15 +30,24 @@ ZarrFormat = Literal[2, 3]
 EndianLiteral = Literal["little", "big"]
 
 
+def _unwrap_endian(data: object) -> object:
+    """Reduce an endianness value to a plain string where possible.
+
+    zarr has spelled this as a plain `Enum`, as a str-subclass enum, and now as a
+    bare string, and we accept all three. Plain enums yield their `value`;
+    `str.__str__` bypasses `Enum.__str__`, which would otherwise render a
+    str-subclass member as "Endian.big".
+    """
+    data = getattr(data, "value", data)
+    return str.__str__(data) if isinstance(data, str) else data
+
+
 def _parse_endian(data: object) -> EndianLiteral | None:
     if data is None:
         return None
-    if isinstance(data, str):
-        # `str.__str__` bypasses `Enum.__str__`, so str-subclass enum members such as
-        # zarr's deprecated `Endian` normalise to their underlying string.
-        value = str.__str__(data)
-        if value in ("little", "big"):
-            return cast(EndianLiteral, value)
+    value = _unwrap_endian(data)
+    if value in ("little", "big"):
+        return cast(EndianLiteral, value)
     raise ValueError(
         f"Invalid endian value: {data!r}. Expected 'little', 'big', or None."
     )
@@ -154,7 +163,9 @@ class ChunkyCodec(ArrayBytesCodec):
         if (
             chunk_array.dtype.itemsize > 1
             and self.endian is not None
-            and self.endian != chunk_array.byteorder
+            # older zarr reports `byteorder` as an enum member, which never compares
+            # equal to a plain string
+            and self.endian != _unwrap_endian(chunk_array.byteorder)
         ):
             # type-ignore is a numpy bug
             # see https://github.com/numpy/numpy/issues/26473

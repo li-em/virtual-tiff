@@ -16,6 +16,7 @@ from virtual_tiff.codecs import (
     ChunkyCodec,
     HorizontalDeltaCodec,
     _parse_endian,
+    _unwrap_endian,
     check_codecjson_v2,
 )
 from virtual_tiff.imagecodecs import (
@@ -110,16 +111,31 @@ def test_parse_endian_string_big():
     assert _parse_endian("big") == "big"
 
 
-def test_parse_endian_normalises_str_enum():
-    # Callers may still pass a str-subclass enum member, e.g. zarr's deprecated
-    # `Endian`. It should come back as a plain str so `.value`-free code works.
-    class Endian(str, Enum):
-        little = "little"
-        big = "big"
+class _StrEndian(str, Enum):
+    little = "little"
+    big = "big"
 
-    parsed = _parse_endian(Endian.big)
+
+class _PlainEndian(Enum):
+    little = "little"
+    big = "big"
+
+
+# zarr has spelled Endian as a plain enum, a str-subclass enum, and a bare string
+# across versions, and callers may still hand us any of them.
+@pytest.mark.parametrize("member", [_StrEndian.big, _PlainEndian.big])
+def test_parse_endian_normalises_enum(member):
+    parsed = _parse_endian(member)
     assert parsed == "big"
     assert type(parsed) is str
+
+
+@pytest.mark.parametrize("member", [_StrEndian.little, _PlainEndian.little, "little"])
+def test_unwrap_endian_compares_equal_to_string(member):
+    """The encode path compares `self.endian` against `NDBuffer.byteorder`, which
+    older zarr reports as an enum member. Unwrapping keeps that comparison
+    meaningful instead of always reporting a mismatch."""
+    assert _unwrap_endian(member) == "little"
 
 
 def test_parse_endian_invalid():
