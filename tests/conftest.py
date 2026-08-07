@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 import numpy as np
 import pytest
 import rioxarray
+import tifffile
 import xarray as xr
 from obspec_utils.registry import ObjectStoreRegistry
 from obstore.store import LocalStore
@@ -37,6 +38,27 @@ def geotiff_file(tmp_path: Path) -> str:
     filepath = tmp_path / "air.tif"
     with xr.tutorial.open_dataset("air_temperature") as ds:
         ds.isel(time=0).rio.to_raster(filepath, driver="COG", COMPRESS="DEFLATE")
+    return str(filepath)
+
+
+@pytest.fixture
+def chunky_rgb_file(tmp_path: Path) -> str:
+    """Create a tiled, pixel-interleaved (PlanarConfiguration=1) RGB TIFF.
+
+    This exercises the chunky codec path, which needs samples_per_pixel > 1
+    *and* planar_configuration == 1 -- the separate-planes multi-band tests
+    take a different branch.
+    """
+    filepath = tmp_path / "chunky_rgb.tif"
+    rng = np.random.default_rng(0)
+    data = rng.integers(0, 256, size=(64, 64, 3), dtype="uint8")
+    tifffile.imwrite(
+        filepath,
+        data,
+        photometric="rgb",
+        planarconfig="contig",
+        tile=(16, 16),
+    )
     return str(filepath)
 
 

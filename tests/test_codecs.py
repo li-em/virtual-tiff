@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 import numpy as np
 import pytest
-from zarr.codecs.bytes import Endian
 from zarr.core.array_spec import ArrayConfig, ArraySpec
 from zarr.core.buffer import default_buffer_prototype
 from zarr.core.buffer.cpu import NDBuffer
@@ -103,15 +103,23 @@ def test_parse_endian_none():
 
 
 def test_parse_endian_string_little():
-    assert _parse_endian("little") == Endian.little
+    assert _parse_endian("little") == "little"
 
 
 def test_parse_endian_string_big():
-    assert _parse_endian("big") == Endian.big
+    assert _parse_endian("big") == "big"
 
 
-def test_parse_endian_enum_passthrough():
-    assert _parse_endian(Endian.big) is Endian.big
+def test_parse_endian_normalises_str_enum():
+    # Callers may still pass a str-subclass enum member, e.g. zarr's deprecated
+    # `Endian`. It should come back as a plain str so `.value`-free code works.
+    class Endian(str, Enum):
+        little = "little"
+        big = "big"
+
+    parsed = _parse_endian(Endian.big)
+    assert parsed == "big"
+    assert type(parsed) is str
 
 
 def test_parse_endian_invalid():
@@ -129,7 +137,7 @@ def test_parse_endian_invalid_type():
 
 def test_chunky_codec_default_endian():
     codec = ChunkyCodec()
-    assert codec.endian == Endian.little
+    assert codec.endian == "little"
 
 
 @pytest.mark.parametrize("endian", ["big", "little"])
@@ -187,7 +195,7 @@ def test_chunky_codec_none_endian_to_json_v2():
 def test_chunky_codec_from_json_v3_string_only():
     """A v3 codec can be just a name string with no configuration."""
     restored = ChunkyCodec._from_json_v3("ChunkyCodec")
-    assert restored.endian == Endian.little  # default
+    assert restored.endian == "little"  # default
 
 
 def test_chunky_codec_from_json_v2_invalid():
@@ -240,14 +248,14 @@ def test_chunky_codec_evolve_from_array_spec_single_byte():
     """endian should be preserved for single-byte dtypes (item_size > 0)."""
     codec = ChunkyCodec(endian="little")
     evolved = codec.evolve_from_array_spec(_make_spec((10,), UInt8()))
-    assert evolved.endian == Endian.little
+    assert evolved.endian == "little"
 
 
 def test_chunky_codec_evolve_from_array_spec_multi_byte():
     """endian should be preserved for multi-byte dtypes."""
     codec = ChunkyCodec(endian="big")
     evolved = codec.evolve_from_array_spec(_make_spec((10,), UInt16()))
-    assert evolved.endian == Endian.big
+    assert evolved.endian == "big"
 
 
 def test_chunky_codec_evolve_from_array_spec_none_endian_multi_byte():
