@@ -467,6 +467,16 @@ def _construct_manifest_group(
         )
 
 
+def _subifd_offsets(ifd: ImageFileDirectory) -> list[int]:
+    """The offsets in tag 330, whether the tag holds one or a list."""
+    value = ifd.other_tags.get(330)
+    if isinstance(value, int):
+        return [value]
+    if isinstance(value, list):
+        return [v for v in value if isinstance(v, int)]
+    return []
+
+
 def _levels_of(
     tiff: TIFF, ifd: ImageFileDirectory, url: str, endian: str, name: str
 ) -> dict[str, ManifestArray]:
@@ -475,10 +485,7 @@ def _levels_of(
     SubIFDs are outside the top-level chain, so they are read at the offsets the tag gives.
     """
     arrays = {name: _construct_manifest_array(ifd=ifd, url=url, endian=endian)}
-    offsets = ifd.other_tags.get(330) or []
-    if isinstance(offsets, int):
-        offsets = [offsets]
-    for level, offset in enumerate(offsets):
+    for level, offset in enumerate(_subifd_offsets(ifd)):
         reduced = sync(_read_ifd_at(tiff, offset))
         arrays[f"{name}.{level}"] = _construct_manifest_array(
             ifd=reduced, url=url, endian=endian
@@ -515,13 +522,12 @@ def _build_manifest_arrays(
         if subifds:
             manifest_arrays.update(_levels_of(tiff, ifd, url, endian, str(idx)))
         else:
-            levels = ifd.other_tags.get(330)
+            levels = _subifd_offsets(ifd)
             if levels:
                 # The IFD's own offsets and byte counts describe it completely, so the array
                 # built below is correct without its SubIFDs.
-                count = 1 if isinstance(levels, int) else len(levels)
                 warnings.warn(
-                    f"This IFD carries {count} SubIFD(s) (tag 330), which hold "
+                    f"This IFD carries {len(levels)} SubIFD(s) (tag 330), which hold "
                     "reduced-resolution levels; this array is the full-resolution image alone. "
                     "Pass `subifds=True` to include them.",
                     UserWarning,
