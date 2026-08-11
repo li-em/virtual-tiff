@@ -133,6 +133,25 @@ def test_chunky_codec_default_endian():
 
 
 @pytest.mark.parametrize("endian", ["big", "little"])
+def test_chunky_codec_endian_is_a_literal_string(endian):
+    """zarr 3.3 turned `Endian` into a deprecation shim: a class with no members and no
+    constructor, so `Endian("little")` raises `TypeError: Endian() takes no arguments`. The codec
+    stores the literal instead, which is what `BytesCodec` does there too.
+    """
+    codec = ChunkyCodec(endian=endian)
+    assert codec.endian == endian
+    assert isinstance(codec.endian, str)
+    assert codec.to_json(zarr_format=3)["configuration"]["endian"] == endian
+
+
+def test_chunky_codec_accepts_a_deprecated_endian_member():
+    """Accessing a member of the shim returns the equivalent string, so old callers keep working."""
+    with pytest.warns(DeprecationWarning):
+        member = Endian.big
+    assert ChunkyCodec(endian=member).endian == "big"
+
+
+@pytest.mark.parametrize("endian", ["big", "little"])
 def test_chunky_codec_roundtrip_preserves_endian(endian):
     """ChunkyCodec.to_dict must include the endian config so that
     big-endian data is not silently reinterpreted as little-endian

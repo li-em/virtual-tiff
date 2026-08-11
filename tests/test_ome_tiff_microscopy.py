@@ -7,9 +7,10 @@ one turns its test red rather than leaving it silently passing.
 * `IfdBig` — 10x's Xenium morphology images are BigTIFFs whose tags use the 64-bit IFD8 value type.
   `async_tiff` raises `RuntimeError: Unsupported value type 'IfdBig'` before any codec is consulted,
   so the JPEG 2000 support this parser already has is unreachable for them.
-* Sub-IFDs — their H&E images carry the pyramid in SubIFDs rather than as top-level IFDs, and the
-  parser declines with `NotImplementedError`. `ifd_layout="nested"` does not help: the levels are not
-  IFDs of the file.
+* Sub-IFDs — their H&E images carry the pyramid in SubIFDs rather than as top-level IFDs. The
+  parser used to decline outright; it now maps the requested IFD and warns that the levels behind
+  tag 330 are absent, because `async_tiff` parses IFDs by index in the top-level chain and offers no
+  way to parse one at a given offset.
 * Large objects over HTTP — a 17.7 GB uncompressed OME-TIFF fails while `async_tiff` reads the
   directory, with `Generic HTTP error: request or response body error`, reproducibly. Ranged GETs
   against the same object with a plain HTTP client succeed, so this is not the server refusing.
@@ -52,14 +53,36 @@ def test_bigtiff_with_ifd8_tag_values_is_refused():
 
 
 @requires_network
-def test_pyramid_in_subifds_is_refused():
-    """Xenium H&E: interleaved RGB whose resolution levels are SubIFDs.
+def test_pyramid_in_subifds_warns_and_still_maps_the_full_resolution_level():
+    """Xenium H&E: interleaved RGB, 45087 x 11580, whose five reduced levels are SubIFDs.
 
-    The parser handles `planar_configuration` 1 through `ChunkyCodec`, so only the pyramid's
-    placement is in the way.
+    Tag 330 lists offsets of *other* IFDs, so this IFD's own tile offsets describe it completely and
+    the array is correct — the pyramid is what goes missing. The pixels are checked against
+    tifffile's own read of the same window, so "it parsed" is not mistaken for "it is right".
     """
-    with pytest.raises(NotImplementedError, match="Sub-IFDs"):
-        parse(TENX, XENIUM_LUNG + "Xenium_V1_humanLung_Cancer_FFPE_he_image.ome.tif", ifd=0)
+    tifffile = pytest.importorskip("tifffile")
+    fsspec = pytest.importorskip("fsspec")
+    import numpy as np
+    import zarr
+
+    url = XENIUM_LUNG + "Xenium_V1_humanLung_Cancer_FFPE_he_image.ome.tif"
+    with pytest.warns(UserWarning, match="SubIFD"):
+        store = parse(TENX, url, ifd=0)
+
+    array = zarr.open_array(store, path="0", mode="r")
+    assert array.shape == (3, 45087, 11580)
+    assert [type(codec).__name__ for codec in array.metadata.codecs] == [
+        "TransposeCodec",
+        "ChunkyCodec",
+        "Zlib",
+    ]
+
+    rows, cols = slice(20000, 20064), slice(4000, 4064)
+    with fsspec.filesystem("http", block_size=1 << 22).open(url, "rb") as handle:
+        page = tifffile.TiffFile(handle).series[0].levels[0]
+        # tifffile hands back (y, x, samples) for a chunky page; the manifest is (c, y, x).
+        expected = np.moveaxis(page.asarray()[rows, cols], -1, 0)
+    assert np.array_equal(np.asarray(array[:, rows, cols]), expected)
 
 
 @requires_network

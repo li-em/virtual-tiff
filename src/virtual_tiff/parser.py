@@ -360,8 +360,19 @@ async def _open_tiff(*, path: str, store: ObjectStore) -> TIFF:
 def _construct_manifest_array(
     *, ifd: ImageFileDirectory, url: str, endian: str
 ) -> ManifestArray:
-    if ifd.other_tags.get(330):
-        raise NotImplementedError("TIFFs with Sub-IFDs are not yet supported.")
+    subifds = ifd.other_tags.get(330)
+    if subifds:
+        # Tag 330 lists offsets of reduced-resolution IFDs. They are additional levels, not part of
+        # this IFD: its own tile offsets and byte counts describe it completely, so the array built
+        # below is correct. What is lost is the pyramid, because async_tiff parses IFDs by index in
+        # the top-level chain and offers no way to parse one at a given offset.
+        warnings.warn(
+            f"This IFD carries {len(subifds)} SubIFD(s) (tag 330), which hold reduced-resolution "
+            "levels. Only top-level IFDs can be parsed, so those levels are absent from the "
+            "ManifestStore; this array is the full-resolution image.",
+            UserWarning,
+            stacklevel=2,
+        )
     shape: Tuple[int, ...] = (ifd.image_height, ifd.image_width)
     dtype = _get_dtype(
         sample_format=ifd.sample_format, bits_per_sample=ifd.bits_per_sample
