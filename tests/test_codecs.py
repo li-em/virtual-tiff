@@ -165,7 +165,7 @@ def test_chunky_codec_roundtrip_preserves_endian(endian):
 def test_chunky_codec_to_json_v3(endian):
     codec = ChunkyCodec(endian=endian)
     v3 = codec.to_json(zarr_format=3)
-    assert v3["name"] == "ChunkyCodec"
+    assert v3["name"] == "virtual_tiff.ChunkyCodec"
     assert v3["configuration"]["endian"] == endian
     restored = ChunkyCodec.from_json(v3)
     assert restored.endian == codec.endian
@@ -192,7 +192,7 @@ def test_chunky_codec_from_json_auto_detects_format():
 def test_chunky_codec_none_endian_to_json_v3():
     codec = ChunkyCodec(endian=None)
     v3 = codec.to_json(zarr_format=3)
-    assert v3 == {"name": "ChunkyCodec"}
+    assert v3 == {"name": "virtual_tiff.ChunkyCodec"}
     assert "configuration" not in v3
 
 
@@ -205,7 +205,7 @@ def test_chunky_codec_none_endian_to_json_v2():
 
 def test_chunky_codec_from_json_v3_string_only():
     """A v3 codec can be just a name string with no configuration."""
-    restored = ChunkyCodec._from_json_v3("ChunkyCodec")
+    restored = ChunkyCodec._from_json_v3("virtual_tiff.ChunkyCodec")
     assert restored.endian == Endian.little  # default
 
 
@@ -282,7 +282,7 @@ def test_chunky_codec_evolve_from_array_spec_none_endian_multi_byte():
 def test_horizontal_delta_to_json_v3():
     codec = HorizontalDeltaCodec()
     v3 = codec.to_json(zarr_format=3)
-    assert v3 == {"name": "HorizontalDeltaCodec"}
+    assert v3 == {"name": "virtual_tiff.HorizontalDeltaCodec"}
     restored = HorizontalDeltaCodec.from_json(v3)
     assert isinstance(restored, HorizontalDeltaCodec)
 
@@ -591,3 +591,28 @@ class TestHorizontalDeltaFloat:
         spec = _make_spec((1, 3), UInt16())
         result = await codec._decode_single(nd_buf, spec)
         np.testing.assert_array_equal(result.as_ndarray_like(), original)
+
+
+@pytest.mark.parametrize(
+    "codec", ["virtual_tiff.ChunkyCodec", "virtual_tiff.HorizontalDeltaCodec"]
+)
+def test_codec_resolves_without_importing_this_package(codec):
+    """Whoever reads an array written with these codecs need not know about virtual-tiff.
+
+    The name in the array's metadata is what the `zarr.codecs` entry point publishes, so zarr
+    finds the class on its own. A subprocess is what makes the test meaningful: importing this
+    module has already registered both codecs by hand.
+    """
+    import subprocess
+    import sys
+
+    source = (
+        "import zarr.registry, sys;"
+        f"cls = zarr.registry.get_codec_class({codec!r});"
+        "assert 'virtual_tiff.codecs' in sys.modules, 'entry point did not load the module';"
+        "print(cls.__name__)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", source], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr

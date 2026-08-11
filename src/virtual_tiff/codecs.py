@@ -96,10 +96,10 @@ class ChunkyCodec(ArrayBytesCodec):
         elif zarr_format == 3:
             if self.endian is not None:
                 return {
-                    "name": "ChunkyCodec",
+                    "name": "virtual_tiff.ChunkyCodec",
                     "configuration": {"endian": self.endian},
                 }
-            return {"name": "ChunkyCodec"}
+            return {"name": "virtual_tiff.ChunkyCodec"}
         raise ValueError(
             f"Unsupported Zarr format {zarr_format}. Expected 2 or 3."
         )  # pragma: no cover
@@ -211,7 +211,7 @@ class HorizontalDeltaCodec(ArrayArrayCodec):
         if zarr_format == 2:
             return {"id": "HorizontalDeltaCodec"}  # type: ignore[return-value]
         elif zarr_format == 3:
-            return {"name": "HorizontalDeltaCodec"}
+            return {"name": "virtual_tiff.HorizontalDeltaCodec"}
         raise ValueError(
             f"Unsupported Zarr format {zarr_format}. Expected 2 or 3."
         )  # pragma: no cover
@@ -253,5 +253,7 @@ class HorizontalDeltaCodec(ArrayArrayCodec):
         return input_byte_length
 
 
-register_codec("ChunkyCodec", ChunkyCodec)
-register_codec("HorizontalDeltaCodec", HorizontalDeltaCodec)
+# The same names the `zarr.codecs` entry points publish, so a reader that only opens the array --
+# having never imported this package -- resolves the codec an array was written with.
+register_codec("virtual_tiff.ChunkyCodec", ChunkyCodec)
+register_codec("virtual_tiff.HorizontalDeltaCodec", HorizontalDeltaCodec)
