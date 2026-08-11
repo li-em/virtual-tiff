@@ -13,6 +13,7 @@ from zarr.abc.codec import (
     CodecJSON_V2,
     CodecJSON_V3,
 )
+from zarr.codecs.bytes import Endian
 from zarr.core.buffer import Buffer, NDArrayLike, NDBuffer
 from zarr.core.common import JSON
 from zarr.registry import register_codec
@@ -27,21 +28,15 @@ def check_codecjson_v2(data: object) -> bool:
 
 ZarrFormat = Literal[2, 3]
 
-# The literal strings the zarr 3 spec uses for the bytes codec's endian configuration.
-EndianLiteral = Literal["little", "big"]
 
-
-def _parse_endian(data: object) -> EndianLiteral | None:
-    """Endianness as the literal string.
-
-    ``getattr`` unwraps an ``Endian`` enum member from zarr before 3.3; from 3.3 on, the
-    deprecation shim's member access already returns the string.
-    """
+def _parse_endian(data: object) -> str | None:
     if data is None:
         return None
-    data = getattr(data, "value", data)
+    if isinstance(data, Endian):
+        # zarr before 3.3; the 3.3 shim's member access already returns the string.
+        return data.value
     if isinstance(data, str) and data in ("little", "big"):
-        return cast("EndianLiteral", data)
+        return data
     raise ValueError(
         f"Invalid endian value: {data!r}. Expected 'little', 'big', or None."
     )
@@ -51,7 +46,7 @@ def _parse_endian(data: object) -> EndianLiteral | None:
 class ChunkyCodec(ArrayBytesCodec):
     is_fixed_size = True
 
-    endian: EndianLiteral | None
+    endian: str | None
 
     def __init__(self, *, endian: str | None = "little") -> None:
         object.__setattr__(self, "endian", _parse_endian(endian))
