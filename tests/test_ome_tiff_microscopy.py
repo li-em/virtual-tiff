@@ -1,18 +1,13 @@
 """OME-TIFFs as microscopy platforms write them.
 
-Three published files that this parser could not read, each for a different reason and none of them
-about codecs — the JPEG 2000 tags they use were already in `COMPRESSORS`, and both planar
-configurations were already handled. What stopped them:
+Three published files this parser could not read:
 
-* a BigTIFF whose tags use the 64-bit IFD8 value type, which `async_tiff`'s Python layer refused
-  while reading the directory, so one tag made the file unopenable;
-* a pyramid written into SubIFDs rather than the top-level IFD chain, which this parser declined
-  outright and could not have reached anyway;
-* a 17.7 GB image whose first IFD sits in its last kilobytes, which made a metadata cache that fills
-  from offset 0 request the whole object.
+* a BigTIFF whose tags use the 64-bit IFD8 value type, which `async_tiff` refused;
+* a pyramid written into SubIFDs rather than the top-level IFD chain;
+* a 17.7 GB image whose first IFD sits in its last kilobytes, which a metadata cache filling
+  from offset 0 turned into a whole-object request.
 
-All three read now. The files are 1.2 GB, 4.8 GB and 17.7 GB, and nothing here downloads them: a
-parser reads only the directory.
+Nothing here downloads the images (1.2 to 17.7 GB): a parser reads only the directory.
 """
 
 from __future__ import annotations
@@ -41,8 +36,7 @@ def parse(host: str, url: str, **kwargs):
 def test_bigtiff_with_ifd8_tag_values_reads():
     """Xenium morphology: a BigTIFF whose tag 330 is typed IFD8, with JPEG 2000 tiles.
 
-    Eleven top-level IFDs, which here are focal planes rather than levels — the levels are the
-    SubIFDs each of them carries.
+    The eleven top-level IFDs are focal planes; the levels are their SubIFDs.
     """
     store = parse(TENX, XENIUM_LUNG + "Xenium_V1_humanLung_Cancer_FFPE_morphology.ome.tif")
     arrays = store._group.arrays
@@ -54,10 +48,7 @@ def test_bigtiff_with_ifd8_tag_values_reads():
 
 @requires_network
 def test_subifd_levels_are_read_when_asked_for():
-    """Xenium H&E: five reduced levels, each half the last, outside the top-level chain.
-
-    Without `subifds=True` the same file reports the full-resolution image alone, and says so.
-    """
+    """Xenium H&E: five reduced levels, each half the last, outside the top-level chain."""
     url = XENIUM_LUNG + "Xenium_V1_humanLung_Cancer_FFPE_he_image.ome.tif"
     arrays = parse(TENX, url, ifd=0, subifds=True)._group.arrays
     assert list(arrays) == ["0", "0.0", "0.1", "0.2", "0.3", "0.4"]
@@ -78,11 +69,7 @@ def test_subifd_levels_are_read_when_asked_for():
 
 @requires_network
 def test_the_directory_of_a_17gb_object_is_reachable():
-    """Atera H&E: uncompressed, tiled, planar, ten levels, first IFD at byte 17,731,963,126.
-
-    Its metadata is in the last kilobytes of the file, which is where a cache that fills from the
-    front has to stop being sequential.
-    """
+    """Atera H&E: uncompressed, tiled, planar, ten levels, first IFD at byte 17,731,963,126."""
     array = parse(AWS, ATERA + "he_image.ome.tif", ifd=0)._group.arrays["0"]
     assert tuple(array.shape) == (3, 47337, 90368)
     assert len(list(array.manifest.values())) == 12_549

@@ -32,12 +32,10 @@ EndianLiteral = Literal["little", "big"]
 
 
 def _parse_endian(data: object) -> EndianLiteral | None:
-    """Endianness as the literal string, whatever the caller holds.
+    """Endianness as the literal string.
 
-    zarr 3.3 turned ``zarr.codecs.bytes.Endian`` into a deprecation shim — a class with no members
-    and no constructor, whose member access returns the equivalent string. Earlier zarr versions
-    still ship it as a real enum, so ``getattr`` below unwraps a member from either era to its
-    string value.
+    ``getattr`` unwraps an ``Endian`` enum member from zarr before 3.3; from 3.3 on, the
+    deprecation shim's member access already returns the string.
     """
     if data is None:
         return None
@@ -256,7 +254,7 @@ class HorizontalDeltaCodec(ArrayArrayCodec):
         return input_byte_length
 
 
-# The same names the `zarr.codecs` entry points publish, so a reader that only opens the array --
-# having never imported this package -- resolves the codec an array was written with.
+# The names the `zarr.codecs` entry points publish, so readers that never import this package
+# still resolve the codecs.
 register_codec("virtual_tiff.ChunkyCodec", ChunkyCodec)
 register_codec("virtual_tiff.HorizontalDeltaCodec", HorizontalDeltaCodec)

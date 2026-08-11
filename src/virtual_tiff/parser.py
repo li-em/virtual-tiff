@@ -358,8 +358,8 @@ async def _open_tiff(*, path: str, store: ObjectStore) -> TIFF:
 
 
 async def _read_ifd_at(tiff: TIFF, offset: int) -> ImageFileDirectory:
-    # Awaited inside the loop rather than called outside it: the binding builds its future against
-    # the running loop, so `sync(tiff.ifd_at(offset))` would construct it before there is one.
+    # `sync(tiff.ifd_at(offset))` would build the binding's future before the loop runs;
+    # awaiting here builds it inside.
     return await tiff.ifd_at(offset)
 
 
@@ -472,9 +472,7 @@ def _levels_of(
 ) -> dict[str, ManifestArray]:
     """An IFD and the reduced levels its tag 330 points at, named `name`, `name.0`, `name.1`, ...
 
-    SubIFDs are not in the top-level chain, so they have to be read at the offsets the tag gives.
-    Writers that produce pyramids this way — microscopy formats commonly do — otherwise appear to
-    hold a single resolution.
+    SubIFDs are outside the top-level chain, so they are read at the offsets the tag gives.
     """
     arrays = {name: _construct_manifest_array(ifd=ifd, url=url, endian=endian)}
     offsets = ifd.other_tags.get(330) or []
@@ -519,9 +517,8 @@ def _build_manifest_arrays(
         else:
             levels = ifd.other_tags.get(330)
             if levels:
-                # Tag 330 lists offsets of reduced-resolution IFDs. They are additional levels,
-                # not part of this IFD: its own tile offsets and byte counts describe it
-                # completely, so the array built below is correct with or without them.
+                # The IFD's own offsets and byte counts describe it completely, so the array
+                # built below is correct without its SubIFDs.
                 count = 1 if isinstance(levels, int) else len(levels)
                 warnings.warn(
                     f"This IFD carries {count} SubIFD(s) (tag 330), which hold "
@@ -582,10 +579,9 @@ class VirtualTIFF:
                 "flat" for all arrays to be contained in a single group. Choose "nested" for each array to be contained in a
                 different group. "nested" is compatible with Xarray's DataTree model, because
                 each node in the DataTree needs to be a Dataset (i.e., group) rather than Dataarray (i.e., array). Default is "flat".
-            subifds : Whether to include the reduced-resolution levels an IFD's tag 330 points at, as
-                arrays named after it -- "0", "0.0", "0.1" and so on. Those IFDs are not in the
-                top-level chain, so they are read at the offsets the tag gives. Default is False,
-                which reports the full-resolution image alone and warns when levels exist.
+            subifds : Whether to include the reduced-resolution levels an IFD's tag 330 points at,
+                as arrays named "0", "0.0", "0.1" and so on. Default is False: the full-resolution
+                image alone, with a warning when levels exist.
         """
         self._ifd = ifd
         self.ifd_layout = ifd_layout

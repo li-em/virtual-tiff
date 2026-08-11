@@ -141,9 +141,8 @@ def test_chunky_codec_default_endian():
 
 @pytest.mark.parametrize("endian", ["big", "little"])
 def test_chunky_codec_endian_is_a_literal_string(endian):
-    """zarr 3.3 turned `Endian` into a deprecation shim: a class with no members and no
-    constructor, so `Endian("little")` raises `TypeError: Endian() takes no arguments`. The codec
-    stores the literal instead, which is what `BytesCodec` does there too.
+    """zarr 3.3's `Endian` shim has no constructor, so the codec stores the literal string,
+    as `BytesCodec` does there too.
     """
     codec = ChunkyCodec(endian=endian)
     assert codec.endian == endian
@@ -152,8 +151,8 @@ def test_chunky_codec_endian_is_a_literal_string(endian):
 
 
 def test_chunky_codec_accepts_an_endian_member():
-    """A caller holding `Endian.big` lands on the string, whether their zarr ships it as a real
-    enum member (before 3.3) or as the shim whose member access returns the string (3.3 on).
+    """`Endian.big` lands on the string, whether zarr ships a real enum (before 3.3) or the
+    shim (3.3 on).
     """
     assert ChunkyCodec(endian=_endian_member("big")).endian == "big"
 
@@ -604,11 +603,9 @@ class TestHorizontalDeltaFloat:
     "codec", ["virtual_tiff.ChunkyCodec", "virtual_tiff.HorizontalDeltaCodec"]
 )
 def test_codec_resolves_without_importing_this_package(codec):
-    """Whoever reads an array written with these codecs need not know about virtual-tiff.
+    """The `zarr.codecs` entry point resolves the codec without this package being imported.
 
-    The name in the array's metadata is what the `zarr.codecs` entry point publishes, so zarr
-    finds the class on its own. A subprocess is what makes the test meaningful: importing this
-    module has already registered both codecs by hand.
+    A subprocess is the point: importing this module already registered both codecs by hand.
     """
     import subprocess
     import sys
