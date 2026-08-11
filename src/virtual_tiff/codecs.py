@@ -13,7 +13,6 @@ from zarr.abc.codec import (
     CodecJSON_V2,
     CodecJSON_V3,
 )
-from zarr.codecs.bytes import EndianLiteral
 from zarr.core.buffer import Buffer, NDArrayLike, NDBuffer
 from zarr.core.common import JSON
 from zarr.registry import register_codec
@@ -28,17 +27,21 @@ def check_codecjson_v2(data: object) -> bool:
 
 ZarrFormat = Literal[2, 3]
 
+# The literal strings the zarr 3 spec uses for the bytes codec's endian configuration.
+EndianLiteral = Literal["little", "big"]
+
 
 def _parse_endian(data: object) -> EndianLiteral | None:
-    """Endianness as zarr 3.3 wants it: the literal string.
+    """Endianness as the literal string, whatever the caller holds.
 
-    ``zarr.codecs.bytes.Endian`` is a deprecation shim there — a class with no members and no
-    constructor — so ``Endian("little")`` raises ``TypeError: Endian() takes no arguments``.
-    Accessing a member of it returns the equivalent string, so a caller passing ``Endian.little``
-    still lands in the string branch below.
+    zarr 3.3 turned ``zarr.codecs.bytes.Endian`` into a deprecation shim — a class with no members
+    and no constructor, whose member access returns the equivalent string. Earlier zarr versions
+    still ship it as a real enum, so ``getattr`` below unwraps a member from either era to its
+    string value.
     """
     if data is None:
         return None
+    data = getattr(data, "value", data)
     if isinstance(data, str) and data in ("little", "big"):
         return cast("EndianLiteral", data)
     raise ValueError(

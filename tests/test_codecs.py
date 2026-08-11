@@ -102,16 +102,23 @@ def test_parse_endian_none():
     assert _parse_endian(None) is None
 
 
+def _endian_member(name):
+    """``Endian.<name>`` without the deprecation warning zarr 3.3 attaches to member access."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return getattr(Endian, name)
+
+
 def test_parse_endian_string_little():
-    assert _parse_endian("little") == Endian.little
+    assert _parse_endian("little") == "little"
 
 
 def test_parse_endian_string_big():
-    assert _parse_endian("big") == Endian.big
+    assert _parse_endian("big") == "big"
 
 
-def test_parse_endian_enum_passthrough():
-    assert _parse_endian(Endian.big) is Endian.big
+def test_parse_endian_unwraps_an_endian_member():
+    assert _parse_endian(_endian_member("big")) == "big"
 
 
 def test_parse_endian_invalid():
@@ -129,7 +136,7 @@ def test_parse_endian_invalid_type():
 
 def test_chunky_codec_default_endian():
     codec = ChunkyCodec()
-    assert codec.endian == Endian.little
+    assert codec.endian == "little"
 
 
 @pytest.mark.parametrize("endian", ["big", "little"])
@@ -144,11 +151,11 @@ def test_chunky_codec_endian_is_a_literal_string(endian):
     assert codec.to_json(zarr_format=3)["configuration"]["endian"] == endian
 
 
-def test_chunky_codec_accepts_a_deprecated_endian_member():
-    """Accessing a member of the shim returns the equivalent string, so old callers keep working."""
-    with pytest.warns(DeprecationWarning):
-        member = Endian.big
-    assert ChunkyCodec(endian=member).endian == "big"
+def test_chunky_codec_accepts_an_endian_member():
+    """A caller holding `Endian.big` lands on the string, whether their zarr ships it as a real
+    enum member (before 3.3) or as the shim whose member access returns the string (3.3 on).
+    """
+    assert ChunkyCodec(endian=_endian_member("big")).endian == "big"
 
 
 @pytest.mark.parametrize("endian", ["big", "little"])
@@ -206,7 +213,7 @@ def test_chunky_codec_none_endian_to_json_v2():
 def test_chunky_codec_from_json_v3_string_only():
     """A v3 codec can be just a name string with no configuration."""
     restored = ChunkyCodec._from_json_v3("virtual_tiff.ChunkyCodec")
-    assert restored.endian == Endian.little  # default
+    assert restored.endian == "little"  # default
 
 
 def test_chunky_codec_from_json_v2_invalid():
@@ -259,14 +266,14 @@ def test_chunky_codec_evolve_from_array_spec_single_byte():
     """endian should be preserved for single-byte dtypes (item_size > 0)."""
     codec = ChunkyCodec(endian="little")
     evolved = codec.evolve_from_array_spec(_make_spec((10,), UInt8()))
-    assert evolved.endian == Endian.little
+    assert evolved.endian == "little"
 
 
 def test_chunky_codec_evolve_from_array_spec_multi_byte():
     """endian should be preserved for multi-byte dtypes."""
     codec = ChunkyCodec(endian="big")
     evolved = codec.evolve_from_array_spec(_make_spec((10,), UInt16()))
-    assert evolved.endian == Endian.big
+    assert evolved.endian == "big"
 
 
 def test_chunky_codec_evolve_from_array_spec_none_endian_multi_byte():
