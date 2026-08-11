@@ -364,20 +364,8 @@ async def _read_ifd_at(tiff: TIFF, offset: int) -> ImageFileDirectory:
 
 
 def _construct_manifest_array(
-    *, ifd: ImageFileDirectory, url: str, endian: str, warn_about_subifds: bool = True
+    *, ifd: ImageFileDirectory, url: str, endian: str
 ) -> ManifestArray:
-    subifds = ifd.other_tags.get(330)
-    if subifds and warn_about_subifds:
-        # Tag 330 lists offsets of reduced-resolution IFDs. They are additional levels, not part of
-        # this IFD: its own tile offsets and byte counts describe it completely, so the array built
-        # below is correct with or without them. Pass `subifds=True` to the parser to read them.
-        warnings.warn(
-            f"This IFD carries {len(subifds)} SubIFD(s) (tag 330), which hold reduced-resolution "
-            "levels; this array is the full-resolution image alone. Pass `subifds=True` to include "
-            "them.",
-            UserWarning,
-            stacklevel=2,
-        )
     shape: Tuple[int, ...] = (ifd.image_height, ifd.image_width)
     dtype = _get_dtype(
         sample_format=ifd.sample_format, bits_per_sample=ifd.bits_per_sample
@@ -488,18 +476,14 @@ def _levels_of(
     Writers that produce pyramids this way — microscopy formats commonly do — otherwise appear to
     hold a single resolution.
     """
-    arrays = {
-        name: _construct_manifest_array(
-            ifd=ifd, url=url, endian=endian, warn_about_subifds=False
-        )
-    }
+    arrays = {name: _construct_manifest_array(ifd=ifd, url=url, endian=endian)}
     offsets = ifd.other_tags.get(330) or []
     if isinstance(offsets, int):
         offsets = [offsets]
     for level, offset in enumerate(offsets):
         reduced = sync(_read_ifd_at(tiff, offset))
         arrays[f"{name}.{level}"] = _construct_manifest_array(
-            ifd=reduced, url=url, endian=endian, warn_about_subifds=False
+            ifd=reduced, url=url, endian=endian
         )
     return arrays
 
@@ -533,6 +517,19 @@ def _build_manifest_arrays(
         if subifds:
             manifest_arrays.update(_levels_of(tiff, ifd, url, endian, str(idx)))
         else:
+            levels = ifd.other_tags.get(330)
+            if levels:
+                # Tag 330 lists offsets of reduced-resolution IFDs. They are additional levels,
+                # not part of this IFD: its own tile offsets and byte counts describe it
+                # completely, so the array built below is correct with or without them.
+                count = 1 if isinstance(levels, int) else len(levels)
+                warnings.warn(
+                    f"This IFD carries {count} SubIFD(s) (tag 330), which hold "
+                    "reduced-resolution levels; this array is the full-resolution image alone. "
+                    "Pass `subifds=True` to include them.",
+                    UserWarning,
+                    stacklevel=2,
+                )
             manifest_arrays[str(idx)] = _construct_manifest_array(
                 ifd=ifd, url=url, endian=endian
             )
