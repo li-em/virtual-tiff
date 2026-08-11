@@ -357,19 +357,24 @@ async def _open_tiff(*, path: str, store: ObjectStore) -> TIFF:
     return await TIFF.open(path, store=store)
 
 
+async def _read_ifd_at(tiff: TIFF, offset: int) -> ImageFileDirectory:
+    # Awaited inside the loop rather than called outside it: the binding builds its future against
+    # the running loop, so `sync(tiff.ifd_at(offset))` would construct it before there is one.
+    return await tiff.ifd_at(offset)
+
+
 def _construct_manifest_array(
-    *, ifd: ImageFileDirectory, url: str, endian: str
+    *, ifd: ImageFileDirectory, url: str, endian: str, warn_about_subifds: bool = True
 ) -> ManifestArray:
     subifds = ifd.other_tags.get(330)
-    if subifds:
+    if subifds and warn_about_subifds:
         # Tag 330 lists offsets of reduced-resolution IFDs. They are additional levels, not part of
         # this IFD: its own tile offsets and byte counts describe it completely, so the array built
-        # below is correct. What is lost is the pyramid, because async_tiff parses IFDs by index in
-        # the top-level chain and offers no way to parse one at a given offset.
+        # below is correct with or without them. Pass `subifds=True` to the parser to read them.
         warnings.warn(
             f"This IFD carries {len(subifds)} SubIFD(s) (tag 330), which hold reduced-resolution "
-            "levels. Only top-level IFDs can be parsed, so those levels are absent from the "
-            "ManifestStore; this array is the full-resolution image.",
+            "levels; this array is the full-resolution image alone. Pass `subifds=True` to include "
+            "them.",
             UserWarning,
             stacklevel=2,
         )
@@ -441,6 +446,7 @@ def _construct_manifest_group(
     *,
     ifd: int | None = None,
     ifd_layout: Literal["flat", "nested"] = "flat",
+    subifds: bool = False,
 ) -> ManifestGroup:
     """Construct a ManifestGroup from TIFF IFDs.
 
@@ -449,6 +455,7 @@ def _construct_manifest_group(
         path: Full URL path to the TIFF file
         ifd: Specific IFD index to process, or None for all IFDs
         ifd_layout: How to organize IFDs - 'flat' for single group, 'nested' for group per IFD
+        subifds: Whether to include the reduced levels an IFD's tag 330 points at
 
     Returns:
         ManifestGroup containing the processed TIFF data
@@ -458,7 +465,7 @@ def _construct_manifest_group(
     endian = _ENDIANNESS_TO_STR[tiff.endianness]
 
     # Build manifest arrays from selected IFDs
-    manifest_arrays = _build_manifest_arrays(tiff, url, endian, ifd)
+    manifest_arrays = _build_manifest_arrays(tiff, url, endian, ifd, subifds)
 
     # Organize into appropriate group structure
     attrs: dict[str, Any] = {}
@@ -472,11 +479,37 @@ def _construct_manifest_group(
         )
 
 
+def _levels_of(
+    tiff: TIFF, ifd: ImageFileDirectory, url: str, endian: str, name: str
+) -> dict[str, ManifestArray]:
+    """An IFD and the reduced levels its tag 330 points at, named `name`, `name.0`, `name.1`, ...
+
+    SubIFDs are not in the top-level chain, so they have to be read at the offsets the tag gives.
+    Writers that produce pyramids this way — microscopy formats commonly do — otherwise appear to
+    hold a single resolution.
+    """
+    arrays = {
+        name: _construct_manifest_array(
+            ifd=ifd, url=url, endian=endian, warn_about_subifds=False
+        )
+    }
+    offsets = ifd.other_tags.get(330) or []
+    if isinstance(offsets, int):
+        offsets = [offsets]
+    for level, offset in enumerate(offsets):
+        reduced = sync(_read_ifd_at(tiff, offset))
+        arrays[f"{name}.{level}"] = _construct_manifest_array(
+            ifd=reduced, url=url, endian=endian, warn_about_subifds=False
+        )
+    return arrays
+
+
 def _build_manifest_arrays(
     tiff: TIFF,
     url: str,
     endian: str,
     ifd_index: int | None,
+    subifds: bool = False,
 ) -> dict[str, ManifestArray]:
     """Build manifest arrays from TIFF IFDs.
 
@@ -491,14 +524,15 @@ def _build_manifest_arrays(
     """
     manifest_arrays = {}
 
-    if ifd_index is not None:
-        # Process single specified IFD
-        manifest_arrays[str(ifd_index)] = _construct_manifest_array(
-            ifd=tiff.ifds[ifd_index], url=url, endian=endian
-        )
-    else:
-        # Process all IFDs
-        for idx, ifd in enumerate(tiff.ifds):
+    chosen = (
+        [(ifd_index, tiff.ifds[ifd_index])]
+        if ifd_index is not None
+        else list(enumerate(tiff.ifds))
+    )
+    for idx, ifd in chosen:
+        if subifds:
+            manifest_arrays.update(_levels_of(tiff, ifd, url, endian, str(idx)))
+        else:
             manifest_arrays[str(idx)] = _construct_manifest_array(
                 ifd=ifd, url=url, endian=endian
             )
@@ -538,7 +572,10 @@ def _create_nested_group(
 
 class VirtualTIFF:
     def __init__(
-        self, ifd: int | None = None, ifd_layout: Literal["flat", "nested"] = "flat"
+        self,
+        ifd: int | None = None,
+        ifd_layout: Literal["flat", "nested"] = "flat",
+        subifds: bool = False,
     ) -> None:
         """Configure VirtualTIFF parser.
 
@@ -548,9 +585,14 @@ class VirtualTIFF:
                 "flat" for all arrays to be contained in a single group. Choose "nested" for each array to be contained in a
                 different group. "nested" is compatible with Xarray's DataTree model, because
                 each node in the DataTree needs to be a Dataset (i.e., group) rather than Dataarray (i.e., array). Default is "flat".
+            subifds : Whether to include the reduced-resolution levels an IFD's tag 330 points at, as
+                arrays named after it -- "0", "0.0", "0.1" and so on. Those IFDs are not in the
+                top-level chain, so they are read at the offsets the tag gives. Default is False,
+                which reports the full-resolution image alone and warns when levels exist.
         """
         self._ifd = ifd
         self.ifd_layout = ifd_layout
+        self.subifds = subifds
 
     def __call__(self, url: str, registry: ObjectStoreRegistry) -> ManifestStore:
         """Produce a ManifestStore from a file path and object store instance.
@@ -570,6 +612,7 @@ class VirtualTIFF:
             path=path_in_store,
             ifd=self._ifd,
             ifd_layout=self.ifd_layout,
+            subifds=self.subifds,
         )
         # Convert to a manifest store
         return ManifestStore(registry=registry, group=manifest_group)

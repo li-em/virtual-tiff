@@ -1,22 +1,18 @@
-"""OME-TIFFs as microscopy platforms write them, which this parser does not read yet.
+"""OME-TIFFs as microscopy platforms write them.
 
-Three published files, three distinct blockers. Each is a real object on a public host — the same
-files a spatial-omics reader is handed — and each test asserts the *current* failure so that fixing
-one turns its test red rather than leaving it silently passing.
+Three published files that this parser could not read, each for a different reason and none of them
+about codecs — the JPEG 2000 tags they use were already in `COMPRESSORS`, and both planar
+configurations were already handled. What stopped them:
 
-* `IfdBig` — 10x's Xenium morphology images are BigTIFFs whose tags use the 64-bit IFD8 value type.
-  `async_tiff` raises `RuntimeError: Unsupported value type 'IfdBig'` before any codec is consulted,
-  so the JPEG 2000 support this parser already has is unreachable for them.
-* Sub-IFDs — their H&E images carry the pyramid in SubIFDs rather than as top-level IFDs. The
-  parser used to decline outright; it now maps the requested IFD and warns that the levels behind
-  tag 330 are absent, because `async_tiff` parses IFDs by index in the top-level chain and offers no
-  way to parse one at a given offset.
-* Large objects over HTTP — a 17.7 GB uncompressed OME-TIFF fails while `async_tiff` reads the
-  directory, with `Generic HTTP error: request or response body error`, reproducibly. Ranged GETs
-  against the same object with a plain HTTP client succeed, so this is not the server refusing.
+* a BigTIFF whose tags use the 64-bit IFD8 value type, which `async_tiff`'s Python layer refused
+  while reading the directory, so one tag made the file unopenable;
+* a pyramid written into SubIFDs rather than the top-level IFD chain, which this parser declined
+  outright and could not have reached anyway;
+* a 17.7 GB image whose first IFD sits in its last kilobytes, which made a metadata cache that fills
+  from offset 0 request the whole object.
 
-The files are 1.2 GB, 3.7 GB and 17.7 GB, and nothing here downloads them: a parser reads only the
-directory.
+All three read now. The files are 1.2 GB, 4.8 GB and 17.7 GB, and nothing here downloads them: a
+parser reads only the directory.
 """
 
 from __future__ import annotations
@@ -42,40 +38,66 @@ def parse(host: str, url: str, **kwargs):
 
 
 @requires_network
-def test_bigtiff_with_ifd8_tag_values_is_refused():
-    """Xenium morphology: a BigTIFF whose tag values use the IFD8 type.
+def test_bigtiff_with_ifd8_tag_values_reads():
+    """Xenium morphology: a BigTIFF whose tag 330 is typed IFD8, with JPEG 2000 tiles.
 
-    JPEG 2000 tiles (compression 33003/33005) are already in `COMPRESSORS`, so this file would be
-    readable if the directory could be parsed at all.
+    Eleven top-level IFDs, which here are focal planes rather than levels — the levels are the
+    SubIFDs each of them carries.
     """
-    with pytest.raises(RuntimeError, match="Unsupported value type 'IfdBig'"):
-        parse(TENX, XENIUM_LUNG + "Xenium_V1_humanLung_Cancer_FFPE_morphology.ome.tif", ifd=0)
+    store = parse(TENX, XENIUM_LUNG + "Xenium_V1_humanLung_Cancer_FFPE_morphology.ome.tif")
+    arrays = store._group.arrays
+    assert len(arrays) == 11
+    first = arrays["0"]
+    assert tuple(first.shape) == (17098, 51187)
+    assert "Jpeg2KCodec" in [type(codec).__name__ for codec in first.metadata.codecs]
 
 
 @requires_network
-def test_pyramid_in_subifds_warns_and_still_maps_the_full_resolution_level():
-    """Xenium H&E: interleaved RGB, 45087 x 11580, whose five reduced levels are SubIFDs.
+def test_subifd_levels_are_read_when_asked_for():
+    """Xenium H&E: five reduced levels, each half the last, outside the top-level chain.
 
-    Tag 330 lists offsets of *other* IFDs, so this IFD's own tile offsets describe it completely and
-    the array is correct — the pyramid is what goes missing. The pixels are checked against
-    tifffile's own read of the same window, so "it parsed" is not mistaken for "it is right".
+    Without `subifds=True` the same file reports the full-resolution image alone, and says so.
     """
+    url = XENIUM_LUNG + "Xenium_V1_humanLung_Cancer_FFPE_he_image.ome.tif"
+    arrays = parse(TENX, url, ifd=0, subifds=True)._group.arrays
+    assert list(arrays) == ["0", "0.0", "0.1", "0.2", "0.3", "0.4"]
+    assert [tuple(a.shape) for a in arrays.values()] == [
+        (3, 45087, 11580),
+        (3, 22544, 5790),
+        (3, 11272, 2895),
+        (3, 5636, 1448),
+        (3, 2818, 724),
+        (3, 1409, 362),
+    ]
+    assert sum(len(list(a.manifest.values())) for a in arrays.values()) == 731
+
+    with pytest.warns(UserWarning, match="SubIFD"):
+        alone = parse(TENX, url, ifd=0)._group.arrays
+    assert list(alone) == ["0"]
+
+
+@requires_network
+def test_the_directory_of_a_17gb_object_is_reachable():
+    """Atera H&E: uncompressed, tiled, planar, ten levels, first IFD at byte 17,731,963,126.
+
+    Its metadata is in the last kilobytes of the file, which is where a cache that fills from the
+    front has to stop being sequential.
+    """
+    array = parse(AWS, ATERA + "he_image.ome.tif", ifd=0)._group.arrays["0"]
+    assert tuple(array.shape) == (3, 47337, 90368)
+    assert len(list(array.manifest.values())) == 12_549
+
+
+@requires_network
+def test_the_pixels_are_the_files_own():
+    """That it parses is not that it is right: compare a window against tifffile's own read."""
     tifffile = pytest.importorskip("tifffile")
     fsspec = pytest.importorskip("fsspec")
     import numpy as np
     import zarr
 
     url = XENIUM_LUNG + "Xenium_V1_humanLung_Cancer_FFPE_he_image.ome.tif"
-    with pytest.warns(UserWarning, match="SubIFD"):
-        store = parse(TENX, url, ifd=0)
-
-    array = zarr.open_array(store, path="0", mode="r")
-    assert array.shape == (3, 45087, 11580)
-    assert [type(codec).__name__ for codec in array.metadata.codecs] == [
-        "TransposeCodec",
-        "ChunkyCodec",
-        "Zlib",
-    ]
+    array = zarr.open_array(parse(TENX, url, ifd=0, subifds=True), path="0", mode="r")
 
     rows, cols = slice(20000, 20064), slice(4000, 4064)
     with fsspec.filesystem("http", block_size=1 << 22).open(url, "rb") as handle:
@@ -83,14 +105,3 @@ def test_pyramid_in_subifds_warns_and_still_maps_the_full_resolution_level():
         # tifffile hands back (y, x, samples) for a chunky page; the manifest is (c, y, x).
         expected = np.moveaxis(page.asarray()[rows, cols], -1, 0)
     assert np.array_equal(np.asarray(array[:, rows, cols]), expected)
-
-
-@requires_network
-def test_reading_the_directory_of_a_17gb_object_over_http_fails():
-    """Atera H&E: uncompressed, tiled, planar, ten levels, 17.7 GB.
-
-    Every level is `planar_configuration` 2 with 1 MiB tiles, which this parser supports, and a
-    plain HTTP client fetches any of those tiles by range. It is reading the *directory* that fails.
-    """
-    with pytest.raises(Exception, match="body error"):
-        parse(AWS, ATERA + "he_image.ome.tif", ifd=0)
