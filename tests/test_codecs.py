@@ -141,7 +141,7 @@ def test_chunky_codec_default_endian():
 
 @pytest.mark.parametrize("endian", ["big", "little"])
 def test_chunky_codec_endian_is_a_literal_string(endian):
-    """zarr 3.3's `Endian` shim has no constructor, so the codec stores the literal string,
+    """zarr 3.3's `Endian` adapter has no constructor, so the codec stores the literal string,
     as `BytesCodec` does there too.
     """
     codec = ChunkyCodec(endian=endian)
@@ -152,7 +152,7 @@ def test_chunky_codec_endian_is_a_literal_string(endian):
 
 def test_chunky_codec_accepts_an_endian_member():
     """`Endian.big` lands on the string, whether zarr ships a real enum (before 3.3) or the
-    shim (3.3 on).
+    adapter (3.3 on).
     """
     assert ChunkyCodec(endian=_endian_member("big")).endian == "big"
 
@@ -605,7 +605,7 @@ class TestHorizontalDeltaFloat:
 def test_codec_resolves_without_importing_this_package(codec):
     """The `zarr.codecs` entry point resolves the codec without this package being imported.
 
-    A subprocess is the point: importing this module already registered both codecs by hand.
+    Need to run in a subprocess because importing this module already registered both codecs.
     """
     import subprocess
     import sys

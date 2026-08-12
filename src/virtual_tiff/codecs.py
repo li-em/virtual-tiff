@@ -33,7 +33,7 @@ def _parse_endian(data: object) -> str | None:
     if data is None:
         return None
     if isinstance(data, Endian):
-        # zarr before 3.3; the 3.3 shim's member access already returns the string.
+        # zarr before 3.3; the 3.3 adapter's member access already returns the string.
         return data.value
     if isinstance(data, str) and data in ("little", "big"):
         return data
